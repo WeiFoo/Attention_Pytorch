@@ -1,0 +1,313 @@
+# coding: utf-8
+"""
+This file is to implement Bahdanau et al. Attention Paperish.
+
+For a toy data set(train=10, test=1), I got the following performance
+(forget testing... it's only one random test data)
+
+output:
+epoch:1, train_loss:8.179, test_loss:236.684
+epoch:2, train_loss:5.265, test_loss:115.265
+epoch:3, train_loss:2.871, test_loss:171.435
+epoch:4, train_loss:1.415, test_loss:54.966
+epoch:5, train_loss:0.6, test_loss:152.126
+epoch:6, train_loss:0.257, test_loss:123.877
+epoch:7, train_loss:0.134, test_loss:112.532
+epoch:8, train_loss:0.087, test_loss:90.147
+epoch:9, train_loss:0.064, test_loss:250.825
+epoch:10, train_loss:0.05, test_loss:206.535
+epoch:11, train_loss:0.041, test_loss:94.732
+epoch:12, train_loss:0.035, test_loss:112.189
+epoch:13, train_loss:0.031, test_loss:150.928
+epoch:14, train_loss:0.027, test_loss:87.121
+epoch:15, train_loss:0.024, test_loss:211.864
+epoch:16, train_loss:0.022, test_loss:50.25
+epoch:17, train_loss:0.02, test_loss:84.277
+epoch:18, train_loss:0.019, test_loss:127.005
+epoch:19, train_loss:0.017, test_loss:144.699
+epoch:20, train_loss:0.016, test_loss:144.73
+epoch:21, train_loss:0.015, test_loss:112.445
+epoch:22, train_loss:0.014, test_loss:152.875
+epoch:23, train_loss:0.013, test_loss:129.489
+epoch:24, train_loss:0.013, test_loss:93.044
+epoch:25, train_loss:0.012, test_loss:234.244
+epoch:26, train_loss:0.011, test_loss:89.763
+epoch:27, train_loss:0.011, test_loss:140.503
+....
+
+"""
+import pdb
+import random
+import numpy as np
+import torch
+import torch.nn as nn
+from torch.autograd import Variable
+from torch import optim
+
+USE_CUDA = torch.cuda.is_available()
+
+
+def read_vocab(src):
+    word2idx = {}
+    idx2word = {}
+    for i, w in enumerate(open(src).read().splitlines()):
+        if w not in word2idx:
+            word2idx[w] = i
+            idx2word[i] = w
+    return word2idx, idx2word
+
+
+en_vocab_src = "./Data/vocab.en.txt"
+vi_vocab_src = "./Data/vocab.vi.txt"
+train_en_src = "./Data/train500.en.txt"
+train_vi_src = "./Data/train500.vi.txt"
+valid_en_src = "./Data/valid.en.txt"
+valid_vi_src = "./Data/valid.vi.txt"
+test_en_src = "./Data/test300.en.txt"
+test_vi_src = "./Data/test300.vi.txt"
+
+MAX_LEN = 100  #
+
+
+def data_iterator(s_src, t_src, s_vocab, t_vocab, max_sent_len=MAX_LEN,
+                  batch_size=1, num_sample=0):
+    s_data = open(s_src, "r").readlines()
+    t_data = open(t_src, "r").readlines()
+    if num_sample:
+        idx = random.sample(range(len(s_data)), num_sample)
+        s_data = np.array(s_data)[idx]
+        t_data = np.array(t_data)[idx]
+    f = lambda x: Variable(torch.LongTensor(x).view(1, -1))
+    out_source, out_target, len_source, len_target = [], [], [], []
+    batch_idx = 0
+    for i, (s_line, t_line) in enumerate(zip(s_data, t_data)):
+        if i - batch_idx >= batch_size:
+            yield out_source, out_target, len_source, len_target
+            out_source, out_target, len_source, len_target = [], [], [], []
+            batch_idx = i
+        a_source = [s_vocab[w] if w in s_vocab else s_vocab["<unk>"] for w in
+                    s_line.replace("\n", "").split(" ")][
+                   :max_sent_len]  ## could do reverse the input
+        a_target = [t_vocab[w] if w in t_vocab else t_vocab["<unk>"] for w in
+                    t_line.replace("/n", "</s>").split()]
+        a_target.insert(0, t_vocab["<s>"])
+        var_source = f(a_source).cuda() if USE_CUDA else f(a_source)
+        var_target = f(a_target).cuda() if USE_CUDA else f(a_target)
+        out_source.append(var_source)
+        out_target.append(var_target)
+        if (i + 1) % batch_size == 0:
+            yield (out_source), (out_target), len_source, len_target
+
+
+class EncoderRNN(nn.Module):
+    def __init__(self, input_size, hidden_size, num_layers=1,
+                 bidirectional=False):
+        super(EncoderRNN, self).__init__()
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.bi = bidirectional
+        self.embedding = nn.Embedding(input_size, hidden_size)
+        self.gru = nn.GRU(hidden_size, hidden_size, num_layers=num_layers,
+                          bidirectional=self.bi)
+
+    def forward(self, word_inputs, hidden=None):
+        word_inputs = word_inputs.cuda() if USE_CUDA else word_inputs
+        seq_len = len(word_inputs)
+        embedded = self.embedding(word_inputs).view(seq_len, 1, -1)
+        output, hidden = self.gru(embedded, hidden)
+        return output, hidden
+
+    def initHidden(self):
+        direction = 2 if self.bi else 1
+        result = Variable(
+            torch.zeros(self.num_layers * direction, 1, self.hidden_size))
+        if USE_CUDA:
+            return result.cuda()
+        else:
+            return result
+
+
+class Attention(nn.Module):
+    def __init__(self, hidden_size):
+        super(Attention, self).__init__()
+        self.hidden_size = hidden_size
+        self.atten = nn.Linear(2 * hidden_size, hidden_size)
+        self.w = nn.Parameter(torch.FloatTensor(1, hidden_size))
+        self.softmax = nn.Softmax(dim=0)
+
+    def forward(self, encoder_outputs, hidden):
+        encoder_outputs = encoder_outputs.cuda() if USE_CUDA else encoder_outputs
+        source_len = len(encoder_outputs)
+        atten_all = Variable(torch.zeros(source_len))
+        if USE_CUDA:
+            atten_all = atten_all.cuda()
+
+        for i in range(source_len):
+            atten_all[i] = self.score(hidden.unsqueeze(0), encoder_outputs[i])
+        return self.softmax(atten_all).unsqueeze(0).unsqueeze(0)
+
+    def score(self, hidden, encoder_outputs):
+        # linear
+        res = self.atten(torch.cat((hidden.view(1, -1), encoder_outputs), 1))
+        res = self.w.dot(res)
+        # dot
+        #res = hidden.dot(encoder_outputs)
+
+        return res
+
+
+class DecoderRNN(nn.Module):
+    def __init__(self, hidden_size, output_size, num_layers=1):
+        super(DecoderRNN, self).__init__()
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.embedding = nn.Embedding(output_size, hidden_size)
+        self.gru = nn.GRU(hidden_size * 2, hidden_size)
+        self.out = nn.Linear(hidden_size * 2, output_size)
+        self.softmax = nn.LogSoftmax(dim=1)
+        self.atten = Attention(hidden_size)
+
+    def forward(self, input, last_context, last_hidden, encoder_outputs):
+        input = input.cuda() if USE_CUDA else input
+        embedded = self.embedding(input).view(1, 1, -1)
+
+        rnn_input = torch.cat((embedded, last_context.unsqueeze(0)),
+                              2)  # combine embedding and last context
+        rnn_output, hidden = self.gru(rnn_input, last_hidden)
+        weights = self.atten(encoder_outputs, hidden)  # get weights
+        context = weights.bmm(encoder_outputs.transpose(0, 1))
+
+        rnn_output = rnn_output.squeeze(0)  # 1 x B x N -> B x N
+        context = context.squeeze(1)  # B x 1 x N -> B x N
+
+        output = self.softmax(self.out(torch.cat((rnn_output, context), 1)))
+        return output, context, hidden, weights
+
+    def initHidden(self):
+        result = Variable(torch.zeros(self.num_layers, 1, self.hidden_size))
+        if USE_CUDA:
+            return result.cuda()
+        else:
+            return result
+
+
+def train_one(encoder, decoder, source_vocab, target_vocab, criterion,
+              encoder_opt, decoder_opt, atten_opt, debug=True):
+    total_len = 0
+    total_loss = 0
+    data = None
+    if debug:
+        data = data_iterator(valid_en_src, valid_vi_src, source_vocab,
+                             target_vocab)
+    else:
+        data = data_iterator(train_en_src, train_vi_src, source_vocab,
+                             target_vocab)
+
+    for source, target, _, _ in data:  ## TODO: batch
+        for s, t in zip(source, target):
+            s = s.view(-1)
+            t = t.view(-1)
+            target_len = t.size()[0]
+
+            encoder_hidden = encoder.initHidden()
+            encoder_opt.zero_grad()
+            decoder_opt.zero_grad()
+
+            encoder_outputs, encoder_hidden = encoder(s, encoder_hidden)
+            decoder_hidden = encoder_hidden
+            decoder_context = Variable(torch.zeros(1, decoder.hidden_size))
+            decoder_context = decoder_context.cuda() if USE_CUDA else decoder_context
+            loss = 0
+            for de_i in range(target_len):
+                decoder_output, context, hidden, weights = decoder(t[de_i],
+                                                                   decoder_context,
+                                                                   decoder_hidden,
+                                                                   encoder_outputs)
+                loss += criterion(decoder_output, t[de_i])
+                decoder_context = context
+                decoder_hidden = hidden
+
+            loss.backward()
+            encoder_opt.step()
+            decoder_opt.step()
+            atten_opt.step()
+
+            total_len += target_len
+            total_loss += loss.data[0]
+    if total_len == 0:
+        return 0
+    return total_loss / total_len
+
+
+def evaluate(encoder, decoder, en_sentence, vi_sentence):
+    # Run through encoder
+    encoder_hidden = encoder.initHidden()
+    encoder_outputs, encoder_hidden = encoder(en_sentence.view(-1),encoder_hidden)
+
+    # Create starting vectors for decoder
+    decoder_input = vi_sentence.view(-1)
+    decoder_context = Variable(torch.zeros(1, decoder.hidden_size))
+    decoder_input = decoder_input.cuda() if USE_CUDA else decoder_input
+    decoder_context = decoder_context.cuda() if USE_CUDA else decoder_context
+
+    decoder_hidden = encoder_hidden.clone().view(1, 1, -1)
+    decoded_words = []
+    criterion = nn.NLLLoss()
+    loss = 0
+    # Run through decoder
+    for di in range(decoder_input.size()[0]):
+        decoder_output, decoder_context, decoder_hidden, weights = decoder(
+            decoder_input[di], decoder_context, decoder_hidden,
+            encoder_outputs)
+        loss += criterion(decoder_output.view(1, -1), decoder_input[di].view(-1)).data[0]
+
+    return decoded_words, loss
+
+
+def train(encoder, decoder, source_vocab, target_vocab, n_epoches=200,
+          learning_rate=0.01, print_every_ep=1):
+    encoder_opt = optim.SGD(encoder.parameters(), lr=learning_rate)
+    decoder_opt = optim.SGD(decoder.parameters(), lr=learning_rate)
+    atten_opt = optim.SGD(decoder.atten.parameters(), lr=learning_rate)
+
+    criterion = nn.NLLLoss()
+    total_loss = 0
+    print_loss = 0
+
+    for ep in range(1, n_epoches + 1):
+        loss = train_one(encoder, decoder, source_vocab, target_vocab,
+                         criterion, encoder_opt, decoder_opt, atten_opt)
+        total_loss += loss
+        print_loss += loss
+
+        if ep % print_every_ep == 0:
+            loss_avg = print_loss / print_every_ep
+            print_loss = 0
+            NUM_TEST = 1
+            data = data_iterator(test_en_src, test_vi_src, source_vocab,
+                                 target_vocab, num_sample=NUM_TEST)
+            total_test_loss = 0
+            for test_en_batch, test_vi_batch, _, _ in data:  ## TODO: batch
+                for test_en, test_vi in zip(test_en_batch, test_vi_batch):
+                    test_en = test_en.view(1, 1, -1)
+                    test_vi = test_vi.view(1, 1, -1)
+                    _, test_loss = evaluate(encoder, decoder, test_en, test_vi)
+                    total_test_loss += test_loss
+            test_loss = total_test_loss / NUM_TEST
+            print("epoch:{}, train_loss:{}, test_loss:{}".format(ep, round(
+                loss_avg, 3), round(test_loss, 3)))
+
+
+def run():
+    hidden_size = 256
+    source_vocab, idx2source = read_vocab(en_vocab_src)
+    target_vocab, idx2target = read_vocab(vi_vocab_src)
+    encoder = EncoderRNN(len(source_vocab), hidden_size)
+    encoder = encoder.cuda() if USE_CUDA else encoder
+    decoder = DecoderRNN(hidden_size, len(target_vocab))
+    decoder = decoder.cuda() if USE_CUDA else decoder
+    train(encoder, decoder, source_vocab, target_vocab)
+
+
+if __name__ == "__main__":
+    run()
