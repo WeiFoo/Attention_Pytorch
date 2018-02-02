@@ -315,7 +315,7 @@ def train(encoder, decoder, source_vocab, target_vocab, n_epoches=200,
                     test_loss = evaluate(encoder, decoder, test_en, test_vi)
                     total_test_loss += test_loss
                     num_test += 1
-            test_loss = total_test_loss / num_test
+            test_loss = total_test_loss/num_test
             print("epoch:{}, train_loss:{}, test_loss:{}".format(ep, round(
                 loss_avg, 3), round(test_loss, 3)))
 
