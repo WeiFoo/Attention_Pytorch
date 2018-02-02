@@ -13,6 +13,7 @@ from torch import optim
 
 USE_CUDA = torch.cuda.is_available()
 MAX_LEN = 100
+NUM_TEST = 1
 
 
 en_vocab_src = "./Data/vocab.en.txt"
@@ -117,6 +118,13 @@ class DecoderRNN(nn.Module):
             return result
 
 def read_vocab(src):
+    """
+    Map word to index as well as index to word.
+
+    :param src: str, src of the word vocabulary
+    :return: tuple, (word2index, index2word)
+
+    """
     word2idx = {}
     idx2word = {}
     for i, w in enumerate(open(src).read().splitlines()):
@@ -128,6 +136,22 @@ def read_vocab(src):
 
 def data_iterator(s_src, t_src, s_vocab, t_vocab, max_sent_len=MAX_LEN,
                   batch_size=1, num_sample=0):
+    """
+    A data iterator to supply data into model
+
+    :param s_src: str, src of the source data
+    :param t_src: str, src of the target data
+    :param s_vocab: str, src of the source vocabulary
+    :param t_vocab: str, src of the target vocabulary
+    :param max_sent_len: int, maximum length of the sentence
+    :param batch_size: int(default: 1), batch size
+    :param num_sample: int(default: 0),  how many number of data used(good,
+                                         for debugging)
+    :return:
+        yield(source_data, target_data, len_source, len_target)
+        source_data: [batch_size, variable]
+        target_data: [batch_size, variable]
+    """
     s_data = open(s_src, "r").readlines()
     t_data = open(t_src, "r").readlines()
     if num_sample:
@@ -142,9 +166,9 @@ def data_iterator(s_src, t_src, s_vocab, t_vocab, max_sent_len=MAX_LEN,
             yield out_source, out_target, len_source, len_target
             out_source, out_target, len_source, len_target = [], [], [], []
             batch_idx = i
+        # get the word in vocab
         a_source = [s_vocab[w] if w in s_vocab else s_vocab["<unk>"] for w in
-                    s_line.replace("\n", "").split(" ")][
-                   :max_sent_len]  ## could do reverse the input
+                    s_line.replace("\n", "").split(" ")][:max_sent_len]
         a_target = [t_vocab[w] if w in t_vocab else t_vocab["<unk>"] for w in
                     t_line.replace("/n", "</s>").split()]
         a_target.insert(0, t_vocab["<s>"])
@@ -157,16 +181,25 @@ def data_iterator(s_src, t_src, s_vocab, t_vocab, max_sent_len=MAX_LEN,
 
 
 def train_one(encoder, decoder, source_vocab, target_vocab, criterion,
-              encoder_opt, decoder_opt, atten_opt, debug=True):
+              encoder_opt, decoder_opt, atten_opt):
+    """
+     Train one epoch.
+
+    :param encoder: EncoderRNN, the encoder model
+    :param decoder: DecoderRNN, the decoder model
+    :param source_vocab: dict, the source vocabulary
+    :param target_vocab: dict, the target vocabulary
+    :param criterion: loss function
+    :param encoder_opt: encoder optimizer
+    :param decoder_opt: decoder optimizer
+    :param atten_opt: attention optimizer
+    :return:
+            training loss of this batch
+    """
+
     total_len = 0
     total_loss = 0
-    data = None
-    if debug:
-        data = data_iterator(valid_en_src, valid_vi_src, source_vocab,
-                             target_vocab)
-    else:
-        data = data_iterator(train_en_src, train_vi_src, source_vocab,
-                             target_vocab)
+    data = data_iterator(train_en_src, train_vi_src, source_vocab,target_vocab)
 
     for source, target, _, _ in data:  ## TODO: batch
         for s, t in zip(source, target):
@@ -177,20 +210,18 @@ def train_one(encoder, decoder, source_vocab, target_vocab, criterion,
             encoder_hidden = encoder.initHidden()
             encoder_opt.zero_grad()
             decoder_opt.zero_grad()
-
             encoder_outputs, encoder_hidden = encoder(s, encoder_hidden)
-            decoder_hidden = encoder_hidden
-            decoder_context = Variable(torch.zeros(1, decoder.hidden_size))
-            decoder_context = decoder_context.cuda() if USE_CUDA else decoder_context
+            decode_hidden = encoder_hidden
+            decode_context = Variable(torch.zeros(1, decoder.hidden_size))
+            decode_context = decode_context.cuda() if USE_CUDA else decode_context
             loss = 0
+
             for de_i in range(target_len):
-                decoder_output, context, hidden, weights = decoder(t[de_i],
-                                                                   decoder_context,
-                                                                   decoder_hidden,
-                                                                   encoder_outputs)
-                loss += criterion(decoder_output, t[de_i])
-                decoder_context = context
-                decoder_hidden = hidden
+                out = decoder(t[de_i],decode_context,decode_hidden,encoder_outputs)
+                decode_out, context, hidden = out[0], out[1],out[2]
+                loss += criterion(decode_out, t[de_i])
+                decode_context = context
+                decode_hidden = hidden
 
             loss.backward()
             encoder_opt.step()
@@ -199,12 +230,22 @@ def train_one(encoder, decoder, source_vocab, target_vocab, criterion,
 
             total_len += target_len
             total_loss += loss.data[0]
-    if total_len == 0:
-        return 0
-    return total_loss / total_len
+
+    return 0 if total_len == 0 else total_loss / total_len
 
 
 def evaluate(encoder, decoder, en_sentence, vi_sentence):
+    """
+    Evaluate how the current model perform while training.
+
+    :param encoder: EncoderRNN, the encoder model
+    :param decoder: DecoderRNN, the decoder model
+    :param en_sentence: list, list of source words in one sentence
+    :param vi_sentence: list, list of target words in one sentence
+    :return:
+        loss: float, the loss.
+
+    """
     # Run through encoder
     encoder_hidden = encoder.initHidden()
     encoder_outputs, encoder_hidden = encoder(en_sentence.view(-1),encoder_hidden)
@@ -216,21 +257,36 @@ def evaluate(encoder, decoder, en_sentence, vi_sentence):
     decoder_context = decoder_context.cuda() if USE_CUDA else decoder_context
 
     decoder_hidden = encoder_hidden.clone().view(1, 1, -1)
-    decoded_words = []
     criterion = nn.NLLLoss()
     loss = 0
     # Run through decoder
     for di in range(decoder_input.size()[0]):
-        decoder_output, decoder_context, decoder_hidden, weights = decoder(
-            decoder_input[di], decoder_context, decoder_hidden,
-            encoder_outputs)
-        loss += criterion(decoder_output.view(1, -1), decoder_input[di].view(-1)).data[0]
+        out = decoder(decoder_input[di], decoder_context,
+                      decoder_hidden, encoder_outputs)
+        decoder_output = out[0]
+        decoder_context = out[1]
+        decoder_hidden = out[2]
+        predict = decoder_output.view(1, -1)
+        actual = decoder_input[di].view(-1)
+        loss += criterion(predict, actual).data[0]
 
-    return decoded_words, loss
+    return loss
 
 
 def train(encoder, decoder, source_vocab, target_vocab, n_epoches=200,
           learning_rate=0.01, print_every_ep=1):
+    """
+    Train the model for n_epoches
+
+    :param encoder: EncoderRNN, the encoder model
+    :param decoder: DecoderRNN, the decoder model
+    :param source_vocab: dict, the source vocabulary
+    :param target_vocab: dict, the target vocabulary
+    :param n_epoches: int, number of epoches
+    :param learning_rate: float, learning rates
+    :param print_every_ep: int, print every epoches.
+    :return: None.
+    """
     encoder_opt = optim.SGD(encoder.parameters(), lr=learning_rate)
     decoder_opt = optim.SGD(decoder.parameters(), lr=learning_rate)
     atten_opt = optim.SGD(decoder.atten.parameters(), lr=learning_rate)
@@ -248,7 +304,6 @@ def train(encoder, decoder, source_vocab, target_vocab, n_epoches=200,
         if ep % print_every_ep == 0:
             loss_avg = print_loss / print_every_ep
             print_loss = 0
-            NUM_TEST = 1
             data = data_iterator(test_en_src, test_vi_src, source_vocab,
                                  target_vocab, num_sample=NUM_TEST)
             total_test_loss = 0
@@ -256,7 +311,7 @@ def train(encoder, decoder, source_vocab, target_vocab, n_epoches=200,
                 for test_en, test_vi in zip(test_en_batch, test_vi_batch):
                     test_en = test_en.view(1, 1, -1)
                     test_vi = test_vi.view(1, 1, -1)
-                    _, test_loss = evaluate(encoder, decoder, test_en, test_vi)
+                    test_loss = evaluate(encoder, decoder, test_en, test_vi)
                     total_test_loss += test_loss
             test_loss = total_test_loss / NUM_TEST
             print("epoch:{}, train_loss:{}, test_loss:{}".format(ep, round(
