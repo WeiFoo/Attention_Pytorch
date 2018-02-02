@@ -13,7 +13,6 @@ from torch import optim
 
 USE_CUDA = torch.cuda.is_available()
 MAX_LEN = 100
-NUM_TEST = 1
 
 
 en_vocab_src = "./Data/vocab.en.txt"
@@ -158,6 +157,7 @@ def data_iterator(s_src, t_src, s_vocab, t_vocab, max_sent_len=MAX_LEN,
         idx = random.sample(range(len(s_data)), num_sample)
         s_data = np.array(s_data)[idx]
         t_data = np.array(t_data)[idx]
+
     f = lambda x: Variable(torch.LongTensor(x).view(1, -1))
     out_source, out_target, len_source, len_target = [], [], [], []
     batch_idx = 0
@@ -305,7 +305,7 @@ def train(encoder, decoder, source_vocab, target_vocab, n_epoches=200,
             loss_avg = print_loss / print_every_ep
             print_loss = 0
             data = data_iterator(test_en_src, test_vi_src, source_vocab,
-                                 target_vocab, num_sample=NUM_TEST)
+                                 target_vocab)
             total_test_loss = 0
             for test_en_batch, test_vi_batch, _, _ in data:  ## TODO: batch
                 for test_en, test_vi in zip(test_en_batch, test_vi_batch):
