@@ -13,12 +13,12 @@ MAX_LEN = 100
 
 en_vocab_src = "./Data/vocab.en.txt"
 vi_vocab_src = "./Data/vocab.vi.txt"
-train_en_src = "./Data/valid.en.txt"
-train_vi_src = "./Data/valid.vi.txt"
+train_en_src = "./Data/train10k.en.txt"
+train_vi_src = "./Data/test10k.vi.txt"
 valid_en_src = "./Data/valid.en.txt"
 valid_vi_src = "./Data/valid.vi.txt"
-test_en_src = "./Data/test10.en.txt"
-test_vi_src = "./Data/test10.vi.txt"
+test_en_src = "./Data/test1k.en.txt"
+test_vi_src = "./Data/test1k.vi.txt"
 
 
 class EncoderRNN(nn.Module):
