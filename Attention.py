@@ -1,8 +1,4 @@
 # coding: utf-8
-"""
-
-
-"""
 import pdb
 import random
 import numpy as np
