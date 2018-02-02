@@ -1,39 +1,6 @@
 # coding: utf-8
 """
-This file is to implement Bahdanau et al. Attention Paperish.
 
-For a toy data set(train=10, test=1), I got the following performance
-(forget testing... it's only one random test data)
-
-output:
-epoch:1, train_loss:8.179, test_loss:236.684
-epoch:2, train_loss:5.265, test_loss:115.265
-epoch:3, train_loss:2.871, test_loss:171.435
-epoch:4, train_loss:1.415, test_loss:54.966
-epoch:5, train_loss:0.6, test_loss:152.126
-epoch:6, train_loss:0.257, test_loss:123.877
-epoch:7, train_loss:0.134, test_loss:112.532
-epoch:8, train_loss:0.087, test_loss:90.147
-epoch:9, train_loss:0.064, test_loss:250.825
-epoch:10, train_loss:0.05, test_loss:206.535
-epoch:11, train_loss:0.041, test_loss:94.732
-epoch:12, train_loss:0.035, test_loss:112.189
-epoch:13, train_loss:0.031, test_loss:150.928
-epoch:14, train_loss:0.027, test_loss:87.121
-epoch:15, train_loss:0.024, test_loss:211.864
-epoch:16, train_loss:0.022, test_loss:50.25
-epoch:17, train_loss:0.02, test_loss:84.277
-epoch:18, train_loss:0.019, test_loss:127.005
-epoch:19, train_loss:0.017, test_loss:144.699
-epoch:20, train_loss:0.016, test_loss:144.73
-epoch:21, train_loss:0.015, test_loss:112.445
-epoch:22, train_loss:0.014, test_loss:152.875
-epoch:23, train_loss:0.013, test_loss:129.489
-epoch:24, train_loss:0.013, test_loss:93.044
-epoch:25, train_loss:0.012, test_loss:234.244
-epoch:26, train_loss:0.011, test_loss:89.763
-epoch:27, train_loss:0.011, test_loss:140.503
-....
 
 """
 import pdb
@@ -45,16 +12,7 @@ from torch.autograd import Variable
 from torch import optim
 
 USE_CUDA = torch.cuda.is_available()
-
-
-def read_vocab(src):
-    word2idx = {}
-    idx2word = {}
-    for i, w in enumerate(open(src).read().splitlines()):
-        if w not in word2idx:
-            word2idx[w] = i
-            idx2word[i] = w
-    return word2idx, idx2word
+MAX_LEN = 100
 
 
 en_vocab_src = "./Data/vocab.en.txt"
@@ -63,40 +21,8 @@ train_en_src = "./Data/train500.en.txt"
 train_vi_src = "./Data/train500.vi.txt"
 valid_en_src = "./Data/valid.en.txt"
 valid_vi_src = "./Data/valid.vi.txt"
-test_en_src = "./Data/test300.en.txt"
-test_vi_src = "./Data/test300.vi.txt"
-
-MAX_LEN = 100  #
-
-
-def data_iterator(s_src, t_src, s_vocab, t_vocab, max_sent_len=MAX_LEN,
-                  batch_size=1, num_sample=0):
-    s_data = open(s_src, "r").readlines()
-    t_data = open(t_src, "r").readlines()
-    if num_sample:
-        idx = random.sample(range(len(s_data)), num_sample)
-        s_data = np.array(s_data)[idx]
-        t_data = np.array(t_data)[idx]
-    f = lambda x: Variable(torch.LongTensor(x).view(1, -1))
-    out_source, out_target, len_source, len_target = [], [], [], []
-    batch_idx = 0
-    for i, (s_line, t_line) in enumerate(zip(s_data, t_data)):
-        if i - batch_idx >= batch_size:
-            yield out_source, out_target, len_source, len_target
-            out_source, out_target, len_source, len_target = [], [], [], []
-            batch_idx = i
-        a_source = [s_vocab[w] if w in s_vocab else s_vocab["<unk>"] for w in
-                    s_line.replace("\n", "").split(" ")][
-                   :max_sent_len]  ## could do reverse the input
-        a_target = [t_vocab[w] if w in t_vocab else t_vocab["<unk>"] for w in
-                    t_line.replace("/n", "</s>").split()]
-        a_target.insert(0, t_vocab["<s>"])
-        var_source = f(a_source).cuda() if USE_CUDA else f(a_source)
-        var_target = f(a_target).cuda() if USE_CUDA else f(a_target)
-        out_source.append(var_source)
-        out_target.append(var_target)
-        if (i + 1) % batch_size == 0:
-            yield (out_source), (out_target), len_source, len_target
+test_en_src = "./Data/test30.en.txt"
+test_vi_src = "./Data/test30.vi.txt"
 
 
 class EncoderRNN(nn.Module):
@@ -189,6 +115,45 @@ class DecoderRNN(nn.Module):
             return result.cuda()
         else:
             return result
+
+def read_vocab(src):
+    word2idx = {}
+    idx2word = {}
+    for i, w in enumerate(open(src).read().splitlines()):
+        if w not in word2idx:
+            word2idx[w] = i
+            idx2word[i] = w
+    return word2idx, idx2word
+
+
+def data_iterator(s_src, t_src, s_vocab, t_vocab, max_sent_len=MAX_LEN,
+                  batch_size=1, num_sample=0):
+    s_data = open(s_src, "r").readlines()
+    t_data = open(t_src, "r").readlines()
+    if num_sample:
+        idx = random.sample(range(len(s_data)), num_sample)
+        s_data = np.array(s_data)[idx]
+        t_data = np.array(t_data)[idx]
+    f = lambda x: Variable(torch.LongTensor(x).view(1, -1))
+    out_source, out_target, len_source, len_target = [], [], [], []
+    batch_idx = 0
+    for i, (s_line, t_line) in enumerate(zip(s_data, t_data)):
+        if i - batch_idx >= batch_size:
+            yield out_source, out_target, len_source, len_target
+            out_source, out_target, len_source, len_target = [], [], [], []
+            batch_idx = i
+        a_source = [s_vocab[w] if w in s_vocab else s_vocab["<unk>"] for w in
+                    s_line.replace("\n", "").split(" ")][
+                   :max_sent_len]  ## could do reverse the input
+        a_target = [t_vocab[w] if w in t_vocab else t_vocab["<unk>"] for w in
+                    t_line.replace("/n", "</s>").split()]
+        a_target.insert(0, t_vocab["<s>"])
+        var_source = f(a_source).cuda() if USE_CUDA else f(a_source)
+        var_target = f(a_target).cuda() if USE_CUDA else f(a_target)
+        out_source.append(var_source)
+        out_target.append(var_target)
+        if (i + 1) % batch_size == 0:
+            yield (out_source), (out_target), len_source, len_target
 
 
 def train_one(encoder, decoder, source_vocab, target_vocab, criterion,
@@ -296,7 +261,6 @@ def train(encoder, decoder, source_vocab, target_vocab, n_epoches=200,
             test_loss = total_test_loss / NUM_TEST
             print("epoch:{}, train_loss:{}, test_loss:{}".format(ep, round(
                 loss_avg, 3), round(test_loss, 3)))
-
 
 def run():
     hidden_size = 256
