@@ -307,13 +307,15 @@ def train(encoder, decoder, source_vocab, target_vocab, n_epoches=200,
             data = data_iterator(test_en_src, test_vi_src, source_vocab,
                                  target_vocab)
             total_test_loss = 0
+            num_test = 0
             for test_en_batch, test_vi_batch, _, _ in data:  ## TODO: batch
                 for test_en, test_vi in zip(test_en_batch, test_vi_batch):
                     test_en = test_en.view(1, 1, -1)
                     test_vi = test_vi.view(1, 1, -1)
                     test_loss = evaluate(encoder, decoder, test_en, test_vi)
                     total_test_loss += test_loss
-            test_loss = total_test_loss / NUM_TEST
+                    num_test += 1
+            test_loss = total_test_loss / num_test
             print("epoch:{}, train_loss:{}, test_loss:{}".format(ep, round(
                 loss_avg, 3), round(test_loss, 3)))
 
